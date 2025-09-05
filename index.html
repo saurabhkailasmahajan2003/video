@@ -92,6 +92,9 @@
     let localStream = null;
     let callId = null;
 
+    let remoteDescSet = false;
+    let candidateQueue = [];
+
     const localVideo = document.getElementById("localVideo");
     const remoteVideo = document.getElementById("remoteVideo");
     const createBtn = document.getElementById("createCall");
@@ -154,14 +157,23 @@
         if (ans && !pc.currentRemoteDescription) {
           console.log("📥 Answer received:", ans);
           await pc.setRemoteDescription(new RTCSessionDescription(ans));
+          remoteDescSet = true;
+          // flush queued candidates
+          candidateQueue.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)));
+          candidateQueue = [];
         }
       });
 
       callRef.child("candidates").on("child_added", async (snap) => {
         const cand = snap.val();
-        if (cand) {
-          console.log("📥 Candidate received:", cand);
+        if (!cand) return;
+
+        console.log("📥 Candidate received:", cand);
+        if (remoteDescSet) {
           await pc.addIceCandidate(new RTCIceCandidate(cand));
+        } else {
+          console.log("⏳ Candidate queued until remote description is set");
+          candidateQueue.push(cand);
         }
       });
     };
@@ -185,6 +197,7 @@
 
       console.log("📥 Offer received:", offer);
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      remoteDescSet = true;
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -192,11 +205,20 @@
       await callRef.child("answer").set(answer);
       console.log("📤 Answer sent to Firebase");
 
+      // add queued candidates if any
+      candidateQueue.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)));
+      candidateQueue = [];
+
       callRef.child("candidates").on("child_added", async (snap) => {
         const cand = snap.val();
-        if (cand) {
-          console.log("📥 Candidate received (joiner):", cand);
+        if (!cand) return;
+
+        console.log("📥 Candidate received (joiner):", cand);
+        if (remoteDescSet) {
           await pc.addIceCandidate(new RTCIceCandidate(cand));
+        } else {
+          console.log("⏳ Candidate queued until remote description is set");
+          candidateQueue.push(cand);
         }
       });
     };
@@ -219,3 +241,4 @@
   </script>
 </body>
 </html>
+
