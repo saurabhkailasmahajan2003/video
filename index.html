@@ -1,25 +1,50 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Firebase Realtime DB Test</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>P2P Jewelry Consultation (WebRTC + Firebase)</title>
+  <style>
+    body { font-family: system-ui, Arial; background:#f6f7fb; color:#111; display:flex; flex-direction:column; align-items:center; padding:20px; }
+    h1 { margin:8px 0 18px; }
+    .videos { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+    video { width:360px; height:270px; background:#000; border-radius:8px; object-fit:cover; border:1px solid #ddd; }
+    .controls { margin-top:14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    input[type="text"]{ padding:8px 10px; border-radius:6px; border:1px solid #ccc; width:260px; }
+    button { padding:10px 14px; border-radius:8px; border:0; background:#c99a33; color:#fff; cursor:pointer; }
+    #callId { font-weight:600; color:#1b4f72; margin-left:6px; }
+    .note { margin-top:12px; color:#444; font-size:14px; max-width:700px; text-align:center; }
+  </style>
 </head>
 <body>
-  <h2>Firebase Realtime Database Test</h2>
+  <h1>💎 Jewelry P2P Consultation</h1>
 
-  <input type="text" id="msgInput" placeholder="Enter a message">
-  <button id="sendBtn">Send to Firebase</button>
+  <div class="videos">
+    <div>
+      <p style="text-align:center;margin:6px 0 4px;">You (local)</p>
+      <video id="localVideo" autoplay playsinline muted></video>
+    </div>
+    <div>
+      <p style="text-align:center;margin:6px 0 4px;">Customer (remote)</p>
+      <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+  </div>
 
-  <h3>Latest Message:</h3>
-  <p id="output">Nothing yet...</p>
+  <div class="controls">
+    <button id="createBtn">Create Call</button>
+    <button id="copyCallIdBtn">Copy Call ID</button>
+    <input id="callInput" type="text" placeholder="Enter Call ID to join" />
+    <button id="joinBtn">Join Call</button>
+    <button id="hangupBtn">Hang Up</button>
+  </div>
 
-  <!-- Firebase SDK -->
+  <p class="note">
+    Current Call ID: <span id="callId" data-empty>—</span>
+  </p>
+
   <script type="module">
-    // Import Firebase
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
-    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js";
-
-    // TODO: Replace with your Firebase config (from Firebase Console → Project settings)
+    // ---------- FIREBASE CONFIG ----------
+    // Replace the object below with YOUR firebaseConfig from Firebase Console (including databaseURL)
     const firebaseConfig = {
   apiKey: "AIzaSyAbpNAYCG-0q7kQu8i37vx0yJGvzOg3AwA",
   authDomain: "login-page-bd3a2.firebaseapp.com",
@@ -31,24 +56,229 @@
   measurementId: "G-7XE3CV40FZ"
 };
 
-    // Initialize Firebase
+    // ---------- IMPORTS ----------
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+    import {
+      getDatabase, ref, push, set, onValue, child, get, onChildAdded, remove
+    } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js";
+
+    // ---------- INIT ----------
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
 
-    // Refs
-    const msgRef = ref(db, "test/message");
+    // ---------- DOM ----------
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const createBtn = document.getElementById('createBtn');
+    const joinBtn = document.getElementById('joinBtn');
+    const hangupBtn = document.getElementById('hangupBtn');
+    const callInput = document.getElementById('callInput');
+    const callIdSpan = document.getElementById('callId');
+    const copyCallIdBtn = document.getElementById('copyCallIdBtn');
 
-    // Write data
-    document.getElementById("sendBtn").addEventListener("click", () => {
-      const msg = document.getElementById("msgInput").value;
-      set(msgRef, msg);
-    });
+    // ---------- WEBRTC ----------
+    let localStream = null;
+    let pc = null;
+    let currentCallRef = null;
+    let offerCandidatesRef = null;
+    let answerCandidatesRef = null;
 
-    // Read data
-    onValue(msgRef, (snapshot) => {
-      const data = snapshot.val();
-      document.getElementById("output").innerText = data || "Nothing yet...";
-    });
+    const servers = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
+    // get user media
+    async function startLocalStream() {
+      if (localStream) return;
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+        console.log('Local stream started');
+      } catch (err) {
+        console.error('Could not get user media', err);
+        alert('Please allow camera and microphone access.');
+      }
+    }
+
+    // create RTCPeerConnection
+    function createPeerConnection() {
+      pc = new RTCPeerConnection(servers);
+
+      // send local tracks
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      // remote track handler
+      pc.ontrack = (event) => {
+        console.log('ontrack', event.streams);
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      // ICE candidates collected locally -> push to DB
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        const json = event.candidate.toJSON();
+        // Decide which bucket to push to depending on role (offerer/joiner)
+        if (offerCandidatesRef) {
+          push(offerCandidatesRef, json).catch(e => console.error('push offer candidate failed', e));
+        } else if (answerCandidatesRef) {
+          push(answerCandidatesRef, json).catch(e => console.error('push answer candidate failed', e));
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log('Connection state:', pc.connectionState);
+      };
+
+      return pc;
+    }
+
+    // Clean up function
+    async function hangUp() {
+      try {
+        if (pc) { pc.close(); pc = null; }
+        if (localStream) {
+          localStream.getTracks().forEach(t => t.stop());
+          localStream = null;
+        }
+        localVideo.srcObject = null;
+        remoteVideo.srcObject = null;
+        if (currentCallRef) {
+          // Optionally remove call data. Uncomment to clean DB.
+          // await remove(currentCallRef);
+          currentCallRef = null;
+        }
+        callIdSpan.textContent = '—';
+        alert('Call ended.');
+      } catch (e) {
+        console.error('hangup error', e);
+      }
+    }
+
+    // ---------- Create Call (offerer) ----------
+    createBtn.onclick = async () => {
+      try {
+        await startLocalStream();
+        createPeerConnection();
+
+        // create a new call entry
+        const callRef = push(ref(db, 'calls'));
+        currentCallRef = callRef;
+        callIdSpan.textContent = callRef.key;
+
+        // candidate buckets
+        offerCandidatesRef = child(callRef, 'offerCandidates');
+        answerCandidatesRef = child(callRef, 'answerCandidates');
+
+        // handle incoming answer
+        onValue(child(callRef, 'answer'), async (snap) => {
+          const answer = snap.val();
+          if (!answer) return;
+          console.log('Received answer:', answer);
+          const remoteDesc = new RTCSessionDescription(answer);
+          if (pc && pc.signalingState !== 'closed') await pc.setRemoteDescription(remoteDesc);
+        });
+
+        // watch for answerer's ICE candidates
+        onChildAdded(child(callRef, 'answerCandidates'), (snap) => {
+          const candidate = snap.val();
+          console.log('Offerer: new answer candidate', candidate);
+          pc && pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error(e));
+        });
+
+        // create offer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        // save offer
+        await set(child(callRef, 'offer'), offer.toJSON());
+        console.log('Offer saved to DB. Call ID:', callRef.key);
+
+        alert('Call created. Share this Call ID with the peer: ' + callRef.key);
+      } catch (err) {
+        console.error('create call error', err);
+        alert('Error creating call: ' + err.message);
+      }
+    };
+
+    // ---------- Join Call (answerer) ----------
+    joinBtn.onclick = async () => {
+      const callId = callInput.value.trim();
+      if (!callId) { alert('Enter Call ID'); return; }
+
+      try {
+        await startLocalStream();
+        createPeerConnection();
+
+        // locate the call in DB
+        const callRef = child(ref(db), `calls/${callId}`);
+        const offerSnap = await get(child(callRef, 'offer'));
+        if (!offerSnap.exists()) {
+          alert('Call ID not found or offer not available yet.');
+          // cleanup local
+          if (pc) { pc.close(); pc = null; }
+          return;
+        }
+
+        currentCallRef = callRef;
+        callIdSpan.textContent = callId;
+
+        // candidate buckets
+        offerCandidatesRef = child(callRef, 'offerCandidates');
+        answerCandidatesRef = child(callRef, 'answerCandidates');
+
+        // Apply remote (offer) description
+        const offer = offerSnap.val();
+        console.log('Received offer:', offer);
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+        // create answer
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        // save answer
+        await set(child(callRef, 'answer'), answer.toJSON());
+        console.log('Answer saved to DB');
+
+        // listen for offerer's ICE candidates and add them
+        onChildAdded(offerCandidatesRef, (snap) => {
+          const candidate = snap.val();
+          console.log('Answerer: new offer candidate', candidate);
+          pc && pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error(e));
+        });
+
+        // (pc.onicecandidate will push answer candidates to answerCandidatesRef)
+      } catch (err) {
+        console.error('join call error', err);
+        alert('Error joining call: ' + err.message);
+      }
+    };
+
+    // ---------- Copy Call ID helper ----------
+    copyCallIdBtn.onclick = async () => {
+      const id = callIdSpan.textContent;
+      if (!id || id === '—') { alert('No call ID to copy'); return; }
+      try {
+        await navigator.clipboard.writeText(id);
+        alert('Call ID copied: ' + id);
+      } catch {
+        prompt('Copy this Call ID:', id);
+      }
+    };
+
+    // ---------- Hangup ----------
+    hangupBtn.onclick = async () => {
+      // Optionally remove call node from DB when hangup by caller (be careful)
+      if (currentCallRef) {
+        // use remove(child(ref(db), `calls/${callId}`)) if you store callId
+      }
+      hangUp();
+    };
+
+    // Auto-start camera so UI is ready
+    (async () => {
+      await startLocalStream().catch(()=>{});
+    })();
   </script>
 </body>
 </html>
