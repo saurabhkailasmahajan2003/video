@@ -1,145 +1,278 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>P2P Jewelry Consultation</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f9f9f9;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px;
-    }
-
-    video {
-      width: 45%;
-      margin: 10px;
-      border-radius: 10px;
-      background: black;
-    }
-
-    .btns {
-      margin: 20px;
-    }
-
-    button {
-      padding: 10px 20px;
-      margin: 5px;
-      border: none;
-      border-radius: 6px;
-      background: #c5a880;
-      color: white;
-      font-size: 16px;
-      cursor: pointer;
-    }
-  </style>
+    <title>Firebase WebRTC Video Call</title>
+    <link rel="stylesheet" href="style.css">
 </head>
+<style>
+  body {
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 20px;
+    background-color: #f0f2f5;
+}
 
+.video-container {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+video {
+    width: 320px;
+    height: 240px;
+    background-color: #333;
+    border: 1px solid #ccc;
+}
+
+.controls {
+    margin-bottom: 20px;
+}
+
+button {
+    padding: 10px 15px;
+    margin: 5px;
+    font-size: 16px;
+    cursor: pointer;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+}
+
+button:hover {
+    opacity: 0.9;
+}
+
+input[type="text"] {
+    padding: 8px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+</style>
 <body>
-  <h1>💎 Jewelry Shop P2P Call</h1>
+    <h1>My Simple Video Call App</h1>
 
-  <div>
-    <video id="localVideo" autoplay playsinline muted></video>
-    <video id="remoteVideo" autoplay playsinline></video>
-  </div>
+    <div class="video-container">
+        <video id="localVideo" autoplay muted></video>
+        <video id="remoteVideo" autoplay></video>
+    </div>
 
-  <div class="btns">
-    <button onclick="createCall()">Create Call</button>
-    <button onclick="joinCall()">Join Call</button>
-  </div>
+    <div class="controls">
+        <button id="createCall">Create Call</button>
+        <input type="text" id="callIdInput" placeholder="Enter Call ID">
+        <button id="joinCall">Join Call</button>
+        <button id="hangup">Hang Up</button>
+    </div>
 
-  <!-- Firebase -->
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <p>Call ID: <span id="currentCallId"></span></p>
 
-  <script>
-    // 🔹 Replace with your Firebase config
-    const firebaseConfig = {
-      apiKey: "AIzaSyAbpNAYCG-0q7kQu8i37vx0yJGvzOg3AwA",
-      authDomain: "login-page-bd3a2.firebaseapp.com",
-      projectId: "login-page-bd3a2",
-      storageBucket: "login-page-bd3a2.firebasestorage.app",
-      messagingSenderId: "37176032229",
-      appId: "1:37176032229:web:2a9e2afa02b2b2add70d0c",
-      measurementId: "G-7XE3CV40FZ"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
-
-    let localStream, remoteStream, pc;
-
-    async function init() {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      document.getElementById('localVideo').srcObject = localStream;
-      remoteStream = new MediaStream();
-      document.getElementById('remoteVideo').srcObject = remoteStream;
-
-      const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-      pc = new RTCPeerConnection(servers);
-
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-      pc.ontrack = e => e.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
-    }
-
-    async function createCall() {
-      await init();
-      const callRef = db.ref('calls').push();
-      const offerCandidates = callRef.child('offerCandidates');
-      const answerCandidates = callRef.child('answerCandidates');
-
-      pc.onicecandidate = event => {
-        if (event.candidate) offerCandidates.push(event.candidate.toJSON());
-      };
-
-      const offerDesc = await pc.createOffer();
-      await pc.setLocalDescription(offerDesc);
-
-      callRef.child('offer').set({ sdp: offerDesc.sdp, type: offerDesc.type });
-
-      callRef.child('answer').on('value', async snap => {
-        if (snap.val()) {
-          const answerDesc = new RTCSessionDescription(snap.val());
-          await pc.setRemoteDescription(answerDesc);
-        }
-      });
-
-      answerCandidates.on('child_added', snap => {
-        const candidate = new RTCIceCandidate(snap.val());
-        pc.addIceCandidate(candidate);
-      });
-
-      alert("Share this Call ID: " + callRef.key);
-    }
-
-    async function joinCall() {
-      const callId = prompt("Enter Call ID:");
-      await init();
-      const callRef = db.ref('calls/' + callId);
-      const offerCandidates = callRef.child('offerCandidates');
-      const answerCandidates = callRef.child('answerCandidates');
-
-      pc.onicecandidate = event => {
-        if (event.candidate) answerCandidates.push(event.candidate.toJSON());
-      };
-
-      const offerSnap = await callRef.child('offer').get();
-      if (offerSnap.exists()) {
-        await pc.setRemoteDescription(new RTCSessionDescription(offerSnap.val()));
-        const answerDesc = await pc.createAnswer();
-        await pc.setLocalDescription(answerDesc);
-        callRef.child('answer').set({ sdp: answerDesc.sdp, type: answerDesc.type });
-      }
-
-      offerCandidates.on('child_added', snap => {
-        const candidate = new RTCIceCandidate(snap.val());
-        pc.addIceCandidate(candidate);
-      });
-    }
-  </script>
+    <!-- Firebase SDKs - make sure these are correct for your project -->
+    <!-- You'll need to replace these with the actual CDN links for Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+    
 </body>
+<script>
+  // 1. Firebase Configuration (REPLACE WITH YOUR ACTUAL CONFIG)
+const firebaseConfig = {
+  apiKey: "AIzaSyAbpNAYCG-0q7kQu8i37vx0yJGvzOg3AwA",
+  authDomain: "login-page-bd3a2.firebaseapp.com",
+  databaseURL: "https://login-page-bd3a2-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "login-page-bd3a2",
+  storageBucket: "login-page-bd3a2.firebasestorage.app",
+  messagingSenderId: "37176032229",
+  appId: "1:37176032229:web:2a9e2afa02b2b2add70d0c",
+  measurementId: "G-7XE3CV40FZ"
+};
 
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// 2. DOM Elements
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+const createCallButton = document.getElementById('createCall');
+const joinCallButton = document.getElementById('joinCall');
+const hangupButton = document.getElementById('hangup');
+const callIdInput = document.getElementById('callIdInput');
+const currentCallIdSpan = document.getElementById('currentCallId');
+
+// 3. WebRTC Variables
+let localStream = null;
+let peerConnection = null;
+let currentCallId = null; // To store the ID of the current call
+
+// STUN servers help WebRTC peers find each other through firewalls/NATs
+const configuration = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+    ]
+};
+
+// 4. Get User Media (Camera & Microphone)
+async function getMedia() {
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+        console.log('Local stream acquired.');
+    } catch (e) {
+        console.error('Error getting user media:', e);
+        alert('Please allow camera and microphone access.');
+    }
+}
+
+// 5. Create a new Peer Connection
+function createPeerConnection() {
+    peerConnection = new RTCPeerConnection(configuration);
+
+    // Add local stream tracks to the peer connection
+    localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+    });
+
+    // Listen for remote stream tracks
+    peerConnection.ontrack = (event) => {
+        if (remoteVideo.srcObject !== event.streams[0]) {
+            remoteVideo.srcObject = event.streams[0];
+            console.log('Remote stream received.');
+        }
+    };
+
+    // Gather ICE candidates (network configuration info) and send to Firebase
+    peerConnection.onicecandidate = async (event) => {
+        if (event.candidate && currentCallId) {
+            console.log('Sending ICE candidate:', event.candidate);
+            await db.ref(`calls/${currentCallId}/iceCandidates`).push(event.candidate.toJSON());
+        }
+    };
+
+    // Listen for changes in peer connection state (optional but good for debugging)
+    peerConnection.onconnectionstatechange = (event) => {
+        console.log('Peer connection state changed:', peerConnection.connectionState);
+    };
+}
+
+
+// 6. Signaling with Firebase Realtime Database
+
+// Function to create a new call
+createCallButton.onclick = async () => {
+    if (!localStream) await getMedia(); // Ensure media is acquired
+    createPeerConnection();
+
+    // Create a unique call ID
+    const callRef = db.ref('calls').push();
+    currentCallId = callRef.key;
+    currentCallIdSpan.textContent = currentCallId;
+    console.log('New call created with ID:', currentCallId);
+
+    // Set up listeners for the answer and ICE candidates
+    callRef.child('answer').on('value', async snapshot => {
+        const answer = snapshot.val();
+        if (answer && peerConnection.remoteDescription !== answer) {
+            console.log('Received remote answer:', answer);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+    });
+
+    callRef.child('iceCandidates').on('child_added', async snapshot => {
+        const candidate = snapshot.val();
+        console.log('Received remote ICE candidate:', candidate);
+        try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+            console.error('Error adding received ICE candidate', e);
+        }
+    });
+
+    // Create an offer and set it as local description
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    console.log('Sending offer:', offer);
+
+    // Save the offer to Firebase
+    await callRef.child('offer').set(offer.toJSON());
+};
+
+// Function to join an existing call
+joinCallButton.onclick = async () => {
+    if (!localStream) await getMedia(); // Ensure media is acquired
+    currentCallId = callIdInput.value;
+    if (!currentCallId) {
+        alert('Please enter a Call ID to join.');
+        return;
+    }
+    currentCallIdSpan.textContent = currentCallId;
+    createPeerConnection();
+
+    const callRef = db.ref(`calls/${currentCallId}`);
+
+    // Listen for the offer from the caller
+    callRef.child('offer').once('value', async snapshot => {
+        const offer = snapshot.val();
+        if (offer) {
+            console.log('Received remote offer:', offer);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+            // Create an answer
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            console.log('Sending answer:', answer);
+
+            // Send the answer to Firebase
+            await callRef.child('answer').set(answer.toJSON());
+        } else {
+            alert('Call ID not found or offer not yet available.');
+            // Clean up if no offer is found
+            peerConnection.close();
+            peerConnection = null;
+            currentCallId = null;
+            currentCallIdSpan.textContent = '';
+        }
+    });
+
+    // Listen for ICE candidates from the caller
+    callRef.child('iceCandidates').on('child_added', async snapshot => {
+        const candidate = snapshot.val();
+        console.log('Received remote ICE candidate (joiner):', candidate);
+        try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+            console.error('Error adding received ICE candidate', e);
+        }
+    });
+};
+
+// 7. Hang Up Functionality
+hangupButton.onclick = () => {
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop()); // Stop camera/mic
+        localStream = null;
+    }
+    localVideo.srcObject = null;
+    remoteVideo.srcObject = null;
+    currentCallId = null;
+    currentCallIdSpan.textContent = '';
+    console.log('Call hung up.');
+
+    // Optionally, clean up data in Firebase for this call (important for production)
+    // For simplicity, this example doesn't delete the call node.
+    // db.ref(`calls/${currentCallId}`).remove();
+};
+
+// Initial media acquisition when page loads
+getMedia();
+
+</script>
 </html>
