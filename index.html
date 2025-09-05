@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Jewelry Consultation</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>P2P Jewelry Consultation</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -11,31 +12,134 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      height: 100vh;
-      margin: 0;
+      padding: 20px;
     }
-    h1 {
-      margin-bottom: 10px;
-      color: #333;
-    }
-    iframe {
-      width: 85%;
-      height: 75vh;
-      border: none;
+
+    video {
+      width: 45%;
+      margin: 10px;
       border-radius: 10px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      background: black;
+    }
+
+    .btns {
+      margin: 20px;
+    }
+
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      border: none;
+      border-radius: 6px;
+      background: #c5a880;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
     }
   </style>
 </head>
+
 <body>
-  <h1>💎 Live Jewelry Consultation</h1>
+  <h1>💎 Jewelry Shop P2P Call</h1>
 
-  <!-- Free Jitsi Meet Room -->
-  <iframe 
-    src="https://meet.jit.si/jewelry-shop-consultation"
-    allow="camera; microphone; fullscreen; display-capture">
-  </iframe>
+  <div>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
 
+  <div class="btns">
+    <button onclick="createCall()">Create Call</button>
+    <button onclick="joinCall()">Join Call</button>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <script>
+    // 🔹 Replace with your Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyAbpNAYCG-0q7kQu8i37vx0yJGvzOg3AwA",
+      authDomain: "login-page-bd3a2.firebaseapp.com",
+      projectId: "login-page-bd3a2",
+      storageBucket: "login-page-bd3a2.firebasestorage.app",
+      messagingSenderId: "37176032229",
+      appId: "1:37176032229:web:2a9e2afa02b2b2add70d0c",
+      measurementId: "G-7XE3CV40FZ"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let localStream, remoteStream, pc;
+
+    async function init() {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+      remoteStream = new MediaStream();
+      document.getElementById('remoteVideo').srcObject = remoteStream;
+
+      const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+      pc = new RTCPeerConnection(servers);
+
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      pc.ontrack = e => e.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+    }
+
+    async function createCall() {
+      await init();
+      const callRef = db.ref('calls').push();
+      const offerCandidates = callRef.child('offerCandidates');
+      const answerCandidates = callRef.child('answerCandidates');
+
+      pc.onicecandidate = event => {
+        if (event.candidate) offerCandidates.push(event.candidate.toJSON());
+      };
+
+      const offerDesc = await pc.createOffer();
+      await pc.setLocalDescription(offerDesc);
+
+      callRef.child('offer').set({ sdp: offerDesc.sdp, type: offerDesc.type });
+
+      callRef.child('answer').on('value', async snap => {
+        if (snap.val()) {
+          const answerDesc = new RTCSessionDescription(snap.val());
+          await pc.setRemoteDescription(answerDesc);
+        }
+      });
+
+      answerCandidates.on('child_added', snap => {
+        const candidate = new RTCIceCandidate(snap.val());
+        pc.addIceCandidate(candidate);
+      });
+
+      alert("Share this Call ID: " + callRef.key);
+    }
+
+    async function joinCall() {
+      const callId = prompt("Enter Call ID:");
+      await init();
+      const callRef = db.ref('calls/' + callId);
+      const offerCandidates = callRef.child('offerCandidates');
+      const answerCandidates = callRef.child('answerCandidates');
+
+      pc.onicecandidate = event => {
+        if (event.candidate) answerCandidates.push(event.candidate.toJSON());
+      };
+
+      const offerSnap = await callRef.child('offer').get();
+      if (offerSnap.exists()) {
+        await pc.setRemoteDescription(new RTCSessionDescription(offerSnap.val()));
+        const answerDesc = await pc.createAnswer();
+        await pc.setLocalDescription(answerDesc);
+        callRef.child('answer').set({ sdp: answerDesc.sdp, type: answerDesc.type });
+      }
+
+      offerCandidates.on('child_added', snap => {
+        const candidate = new RTCIceCandidate(snap.val());
+        pc.addIceCandidate(candidate);
+      });
+    }
+  </script>
 </body>
+
 </html>
