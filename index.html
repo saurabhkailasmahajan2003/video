@@ -1,135 +1,221 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>P2P Video Call</title>
+  <title>Peer-to-Peer Video Call</title>
   <style>
-    video { width: 45%; margin: 5px; border: 2px solid #444; border-radius: 8px; }
-    #buttons { margin-top: 10px; }
-    input { width: 250px; padding: 5px; }
+    body {
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 20px;
+      background-color: #f0f2f5;
+    }
+    .video-container {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    video {
+      width: 320px;
+      height: 240px;
+      background: #000;
+      border: 1px solid #ccc;
+    }
+    button {
+      padding: 10px 15px;
+      margin: 5px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+    }
+    input {
+      padding: 8px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+    }
   </style>
 </head>
 <body>
-  <h2>Peer-to-Peer Video Call (Firebase + WebRTC)</h2>
+  <h1>My P2P Video Call</h1>
 
-  <video id="localVideo" autoplay playsinline muted></video>
-  <video id="remoteVideo" autoplay playsinline></video>
-
-  <div id="buttons">
-    <button id="startBtn">Start Call</button>
-    <input id="callIdInput" placeholder="Enter Call ID">
-    <button id="joinBtn">Join Call</button>
+  <div class="video-container">
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
   </div>
 
+  <div>
+    <button id="createCall">Create Call</button>
+    <input id="callIdInput" placeholder="Enter Call ID">
+    <button id="joinCall">Join Call</button>
+    <button id="hangup">Hang Up</button>
+  </div>
+
+  <p>Call ID: <span id="currentCallId"></span></p>
+
   <!-- Firebase -->
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 
   <script>
-    // 🔥 Replace with your Firebase config
+    // 🔹 Replace with your Firebase config
     const firebaseConfig = {
-  apiKey: "AIzaSyAbpNAYCG-0q7kQu8i37vx0yJGvzOg3AwA",
-  authDomain: "login-page-bd3a2.firebaseapp.com",
-  databaseURL: "https://login-page-bd3a2-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "login-page-bd3a2",
-  storageBucket: "login-page-bd3a2.firebasestorage.app",
-  messagingSenderId: "37176032229",
-  appId: "1:37176032229:web:2a9e2afa02b2b2add70d0c",
-  measurementId: "G-7XE3CV40FZ"
-};
+      apiKey: "AIzaSyAbpNAYCG-0q7kQu8i37vx0yJGvzOg3AwA",
+      authDomain: "login-page-bd3a2.firebaseapp.com",
+      databaseURL: "https://login-page-bd3a2-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "login-page-bd3a2",
+      storageBucket: "login-page-bd3a2.appspot.com",
+      messagingSenderId: "37176032229",
+      appId: "1:37176032229:web:2a9e2afa02b2b2add70d0c"
+    };
 
-    const app = firebase.initializeApp(firebaseConfig);
+    firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    const servers = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
-    let pc = new RTCPeerConnection(servers);
-    let localStream, remoteStream;
+    // 🔹 STUN + TURN servers
+    const servers = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        {
+          urls: "turn:openrelay.metered.ca:80",
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        }
+      ]
+    };
+
+    let pc = null;
+    let localStream = null;
+    let callId = null;
 
     const localVideo = document.getElementById("localVideo");
     const remoteVideo = document.getElementById("remoteVideo");
-    const startBtn = document.getElementById("startBtn");
-    const joinBtn = document.getElementById("joinBtn");
+    const createBtn = document.getElementById("createCall");
+    const joinBtn = document.getElementById("joinCall");
+    const hangupBtn = document.getElementById("hangup");
     const callIdInput = document.getElementById("callIdInput");
+    const currentCallIdSpan = document.getElementById("currentCallId");
 
     async function initMedia() {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-      localVideo.srcObject = localStream;
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+        console.log("✅ Local media acquired");
+      } catch (err) {
+        console.error("❌ Media error:", err);
+        alert("Allow camera and microphone!");
+      }
+    }
 
-      remoteStream = new MediaStream();
-      pc.ontrack = event => {
-        event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
-        remoteVideo.srcObject = remoteStream;
+    function createPeerConnection() {
+      pc = new RTCPeerConnection(servers);
+      console.log("✅ New PeerConnection created");
+
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      pc.ontrack = (event) => {
+        console.log("📡 Remote stream received");
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      pc.onicecandidate = async (event) => {
+        if (event.candidate && callId) {
+          console.log("📤 Sending ICE:", event.candidate);
+          await db.ref(`calls/${callId}/candidates`).push(event.candidate.toJSON());
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log("🔄 Connection state:", pc.connectionState);
       };
     }
 
-    // 📌 Create call
-    startBtn.onclick = async () => {
+    createBtn.onclick = async () => {
       await initMedia();
-      const callRef = db.ref("calls").push();
-      const callId = callRef.key;
-      alert("Your Call ID: " + callId);
+      createPeerConnection();
 
-      pc.onicecandidate = event => {
-        if (event.candidate) {
-          callRef.child("offerCandidates").push(event.candidate.toJSON());
-        }
-      };
+      const callRef = db.ref("calls").push();
+      callId = callRef.key;
+      currentCallIdSpan.textContent = callId;
+      console.log("📞 Call created:", callId);
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await callRef.child("offer").set(offer);
 
-      // listen for answer
-      callRef.child("answer").on("value", async snapshot => {
-        const answer = snapshot.val();
-        if (answer && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      await callRef.set({ offer });
+      console.log("📤 Offer saved to Firebase");
+
+      callRef.child("answer").on("value", async (snap) => {
+        const ans = snap.val();
+        if (ans && !pc.currentRemoteDescription) {
+          console.log("📥 Answer received:", ans);
+          await pc.setRemoteDescription(new RTCSessionDescription(ans));
         }
       });
 
-      // listen for answer ICE candidates
-      callRef.child("answerCandidates").on("child_added", snapshot => {
-        const candidate = new RTCIceCandidate(snapshot.val());
-        pc.addIceCandidate(candidate);
+      callRef.child("candidates").on("child_added", async (snap) => {
+        const cand = snap.val();
+        if (cand) {
+          console.log("📥 Candidate received:", cand);
+          await pc.addIceCandidate(new RTCIceCandidate(cand));
+        }
       });
     };
 
-    // 📌 Join call
     joinBtn.onclick = async () => {
-      const callId = callIdInput.value;
-      if (!callId) {
-        alert("Please enter a valid Call ID.");
-        return;
-      }
       await initMedia();
-      const callRef = db.ref("calls/" + callId);
+      createPeerConnection();
 
-      pc.onicecandidate = event => {
-        if (event.candidate) {
-          callRef.child("answerCandidates").push(event.candidate.toJSON());
-        }
-      };
+      callId = callIdInput.value;
+      if (!callId) return alert("Enter a Call ID!");
+      currentCallIdSpan.textContent = callId;
 
-      const snapshot = await callRef.child("offer").get();
-      if (!snapshot.exists()) {
-        alert("Call ID not found or offer not yet created.");
+      const callRef = db.ref(`calls/${callId}`);
+      const offerSnap = await callRef.child("offer").once("value");
+      const offer = offerSnap.val();
+
+      if (!offer) {
+        alert("❌ Call ID not found or offer not ready.");
         return;
       }
 
-      const offer = snapshot.val();
+      console.log("📥 Offer received:", offer);
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await callRef.child("answer").set(answer);
 
-      // listen for offer ICE candidates
-      callRef.child("offerCandidates").on("child_added", snapshot => {
-        const candidate = new RTCIceCandidate(snapshot.val());
-        pc.addIceCandidate(candidate);
+      await callRef.child("answer").set(answer);
+      console.log("📤 Answer sent to Firebase");
+
+      callRef.child("candidates").on("child_added", async (snap) => {
+        const cand = snap.val();
+        if (cand) {
+          console.log("📥 Candidate received (joiner):", cand);
+          await pc.addIceCandidate(new RTCIceCandidate(cand));
+        }
       });
     };
+
+    hangupBtn.onclick = () => {
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      localVideo.srcObject = null;
+      remoteVideo.srcObject = null;
+      console.log("🛑 Call ended");
+    };
+
+    initMedia(); // start media immediately
   </script>
 </body>
 </html>
